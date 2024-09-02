@@ -1,0 +1,24 @@
+type: Topology
+pool_size: 4
+cluster:
+  initial_size: 0
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
+run_first:
+  - test_raft_recovery_stuck
+  - test_raft_recovery_basic
+  - test_group0_schema_versioning
+  - test_tablets_migration
+  - test_zero_token_nodes_topology_ops
+skip_in_debug:
+  - test_shutdown_hang
+  - test_replace
+  - test_old_ip_notification_repro
+  - test_node_shutdown_waits_for_pending_requests
+run_in_dev:
+  - test_group0_schema_versioning
+  - test_different_group0_ids
+  - test_replace_ignore_nodes
+  - test_zero_token_nodes_no_replication
+  - test_not_enough_token_owners
