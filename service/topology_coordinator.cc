@@ -2111,6 +2111,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<> handle_node_transition(node_to_work_on&& node) {
         rtlogger.info("coordinator fiber found a node to work on id={} state={}", node.id, node.rs->state);
 
+        if (node.rs->state != node_state::normal && node.request.value() == topology_request::remove) {
+            throw std::runtime_error(::format("removenode: node {} is in '{}' state. Wait for it to be in 'normal' state", node.id, node.rs->state));
+        }
+
         switch (node.rs->state) {
             case node_state::none: {
                 if (_topo_sm._topology.normal_nodes.empty()) {
