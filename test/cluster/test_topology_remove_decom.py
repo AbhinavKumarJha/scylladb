@@ -191,3 +191,19 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
     await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
             manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
+@pytest.mark.asyncio
+async def test_decom_with_race(manager: ManagerClient):
+    """
+    Tests the execution flow in case of performing decommission node
+    operation, while applying other concurrent operations on group0.
+
+    """
+    servers = await manager.running_servers()
+    await manager.servers_add(1, property_file=servers[0].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 4
+
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "decommission_update_internal_throw", one_shot=True) for s in servers])
+
+    await manager.decommission_node(servers[3].server_id)
+

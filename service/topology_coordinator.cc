@@ -2124,6 +2124,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     }
 
+    future<> decommission_update_internal(node_to_work_on& node){
+        utils::get_local_injector().inject("decommission_update_internal_throw", [] {
+            throw group0_concurrent_modification{};
+        });
+
+        utils::chunked_vector<canonical_mutation> muts;
+
+        topology_mutation_builder builder(node.guard.write_timestamp());
+        cleanup_ignored_nodes_on_left(builder, node.id);
+        builder.del_transition_state()
+                .with_node(node.id)
+                .set("node_state", node_state::left);
+        muts.push_back(builder.build());
+        co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
+        co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
+        auto str = node.rs->state == node_state::decommissioning
+                ? ::format("finished decommissioning node {}", node.id)
+                : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
+        co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
+        co_return;
+    }
+
     // Returns `true` iff there was work to do.
     future<bool> handle_topology_transition(group0_guard guard) {
         auto tstate = _topo_sm._topology.tstate;
@@ -2630,6 +2652,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 break;
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
+                
+                // Denotes the case when this path is already executed before but topology update was unsuccessful.
+                // So we can skip all steps and perform the topology update operation directly.
+                if (!_group0.is_member(node.id, false)) {
+                    co_await decommission_update_internal(node);
+                    break;
+                }
 
                 if (node.id == _raft.id()) {
                     // Someone else needs to coordinate the rest of the decommission process,
@@ -2707,20 +2736,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // because we'll ban it as soon as we tell it to shut down.
                 node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
 
-                utils::chunked_vector<canonical_mutation> muts;
-
-                topology_mutation_builder builder(node.guard.write_timestamp());
-                cleanup_ignored_nodes_on_left(builder, node.id);
-                builder.del_transition_state()
-                       .with_node(node.id)
-                       .set("node_state", node_state::left);
-                muts.push_back(builder.build());
-                co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
-                co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
-                auto str = node.rs->state == node_state::decommissioning
-                        ? ::format("finished decommissioning node {}", node.id)
-                        : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
-                co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
+                co_await decommission_update_internal(node);
             }
                 break;
             case topology::transition_state::rollback_to_normal: {
